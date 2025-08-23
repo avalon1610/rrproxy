@@ -16,8 +16,12 @@ use super::config::LocalProxyConfig;
 use super::https::handle_connect_request as handle_connect_raw;
 use super::chunking::{chunk_and_send_request, forward_single_request, handle_connect_request};
 use crate::utils::stream::ReconstructedStream;
+use crate::cert_gen::{self, CertConfig};
 
 pub async fn start(config: LocalProxyConfig) -> Result<()> {
+    // Handle certificate generation or validation
+    handle_certificates(&config)?;
+    
     let listen_addr: SocketAddr = config.listen_addr.parse()?;
     let listener = TcpListener::bind(listen_addr).await?;
     info!("Local proxy listening on {}", listen_addr);
@@ -140,4 +144,49 @@ async fn handle_http_request(
     }
 
     result
+}
+
+/// Handle certificate generation and validation
+fn handle_certificates(config: &LocalProxyConfig) -> Result<()> {
+    if config.generate_cert {
+        info!("Certificate generation requested");
+        
+        let cert_config = if let Some(ref common_name) = config.cert_common_name {
+            let mut cfg = CertConfig::default();
+            cfg.common_name = common_name.clone();
+            
+            // Add custom domains if specified
+            if let Some(ref domains) = config.cert_domains {
+                cfg.san_domains = domains.clone();
+                // Ensure common name is in SAN list
+                if !cfg.san_domains.contains(common_name) {
+                    cfg.san_domains.push(common_name.clone());
+                }
+            } else {
+                // Use common name as the only SAN
+                cfg.san_domains = vec![common_name.clone()];
+            }
+            
+            cfg
+        } else {
+            CertConfig::default()
+        };
+        
+        info!("Generating certificate for: {}", cert_config.common_name);
+        cert_gen::generate_and_save_certificate(&cert_config, &config.cert_file, &config.key_file)?;
+        info!("Certificate generated and saved successfully");
+    } else {
+        // Validate existing certificates
+        info!("Validating existing certificate files: {} and {}", config.cert_file, config.key_file);
+        
+        if !cert_gen::validate_certificate_files(&config.cert_file, &config.key_file)? {
+            warn!("Certificate files are missing or invalid. Consider using --generate-cert to create new ones.");
+            warn!("Files: {} and {}", config.cert_file, config.key_file);
+            warn!("You can also specify custom paths with --cert-file and --key-file");
+        } else {
+            info!("Certificate files validated successfully");
+        }
+    }
+    
+    Ok(())
 }

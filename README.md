@@ -238,50 +238,6 @@ File output (JSON format):
 }
 ```
 
-## Deployment
-
-### Quick Deployment Guide
-
-1. **Generate SSL/TLS Certificates**
-   ```bash
-   # Linux/macOS
-   cd scripts && chmod +x generate_certs.sh && ./generate_certs.sh
-   
-   # Windows PowerShell
-   cd scripts && powershell -ExecutionPolicy Bypass -File generate_certs.ps1
-   
-   # Windows Command Prompt
-   cd scripts && generate_certs.bat
-   ```
-
-2. **Build for Production**
-   ```bash
-   cargo build --release
-   ```
-
-3. **Deploy Remote Proxy** (on server outside firewall)
-   ```bash
-   ./target/release/rrproxy remote --listen-addr "0.0.0.0:8081" --log-file logs/remote.log
-   ```
-
-4. **Deploy Local Proxy** (on client inside firewall)
-   ```bash
-   ./target/release/rrproxy local --listen-addr "127.0.0.1:8080" --remote-addr "http://server-ip:8081" --log-file logs/local.log
-   ```
-
-5. **Configure Applications**
-   Set applications to use HTTP/HTTPS proxy: `127.0.0.1:8080`
-
-### Certificate Management
-
-The deployment scripts automatically:
-- Generate 2048-bit RSA certificates
-- Include Subject Alternative Names for localhost and 127.0.0.1
-- Set 365-day validity period
-- Backup existing certificates before generating new ones
-
-For production use, replace self-signed certificates with trusted CA certificates.
-
 ## Testing
 
 ### Unit Tests

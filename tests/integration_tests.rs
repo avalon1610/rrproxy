@@ -29,6 +29,11 @@ async fn integration_test_real_internet_request() {
         firewall_proxy: None,
         log_level: "info".to_string(),
         log_file: None,
+        cert_file: "cert.pem".to_string(),
+        key_file: "key.pem".to_string(),
+        generate_cert: false,
+        cert_common_name: None,
+        cert_domains: None,
     };
 
     let local_handle = tokio::spawn(async move {
@@ -122,6 +127,11 @@ async fn integration_test_large_request_chunking() {
         firewall_proxy: None,
         log_level: "debug".to_string(), // Use debug to see chunking logs
         log_file: None,
+        cert_file: "cert.pem".to_string(),
+        key_file: "key.pem".to_string(),
+        generate_cert: false,
+        cert_common_name: None,
+        cert_domains: None,
     };
 
     let local_handle = tokio::spawn(async move {
@@ -286,6 +296,11 @@ async fn integration_test_firewall_proxy_functionality() {
         firewall_proxy: Some("http://127.0.0.1:19090".to_string()), // Use our test firewall proxy
         log_level: "debug".to_string(),
         log_file: None,
+        cert_file: "cert.pem".to_string(),
+        key_file: "key.pem".to_string(),
+        generate_cert: false,
+        cert_common_name: None,
+        cert_domains: None,
     };
 
     let local_handle = tokio::spawn(async move {

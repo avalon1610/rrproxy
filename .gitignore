@@ -72,3 +72,4 @@ perf.data*
 
 # Local configuration
 config.local.*
+cert_backup*/

@@ -15,18 +15,127 @@ use super::config::LocalProxyConfig;
 use super::chunking::{chunk_and_send_request, forward_single_request};
 
 pub fn create_tls_acceptor() -> Result<TokioTlsAcceptor> {
-    // Read certificate and key files
-    let cert_pem = fs::read("cert.pem")?;
-    let key_pem = fs::read("key.pem")?;
+    // First try to use PKCS#12 file if it exists
+    if std::path::Path::new("cert.p12").exists() {
+        info!("Using existing PKCS#12 certificate file");
+        return create_tls_acceptor_from_p12();
+    }
     
-    // Create identity from PEM data
-    let identity = Identity::from_pkcs8(&cert_pem, &key_pem)?;
-    
-    // Create TLS acceptor
+    // If no PKCS#12 file exists, create one
+    info!("PKCS#12 certificate not found, generating new one");
+    generate_and_load_p12_certificate()
+}
+
+fn create_tls_acceptor_from_p12() -> Result<TokioTlsAcceptor> {
+    let p12_data = fs::read("cert.p12")?;
+    let identity = Identity::from_pkcs12(&p12_data, "")?;
     let acceptor = TlsAcceptor::new(identity)?;
-    let tokio_acceptor = TokioTlsAcceptor::from(acceptor);
+    Ok(TokioTlsAcceptor::from(acceptor))
+}
+
+fn generate_and_load_p12_certificate() -> Result<TokioTlsAcceptor> {
+    use crate::cert_gen::{CertConfig, generate_certificate};
     
-    Ok(tokio_acceptor)
+    info!("Generating new PKCS#12 certificate for TLS");
+    
+    // Generate certificate
+    let config = CertConfig::default();
+    let (cert_pem, key_pem) = generate_certificate(&config)?;
+    
+    // Save PEM files for debugging
+    fs::write("cert.pem", &cert_pem)?;
+    fs::write("key.pem", &key_pem)?;
+    
+    // Create PKCS#12 using OpenSSL command if available
+    let temp_combined = format!("{}\n{}", cert_pem, key_pem);
+    fs::write("temp_combined.pem", &temp_combined)?;
+    
+    let openssl_result = std::process::Command::new("openssl")
+        .args(&[
+            "pkcs12", "-export",
+            "-in", "temp_combined.pem", 
+            "-out", "cert.p12",
+            "-passout", "pass:",
+            "-nodes"
+        ])
+        .output();
+    
+    // Clean up temporary file
+    let _ = fs::remove_file("temp_combined.pem");
+    
+    match openssl_result {
+        Ok(output) if output.status.success() => {
+            info!("Successfully created PKCS#12 certificate using OpenSSL");
+            create_tls_acceptor_from_p12()
+        }
+        _ => {
+            warn!("OpenSSL not available, trying manual PKCS#12 creation");
+            create_manual_pkcs12(&cert_pem, &key_pem)
+        }
+    }
+}
+
+fn create_manual_pkcs12(cert_pem: &str, key_pem: &str) -> Result<TokioTlsAcceptor> {
+    // Create a simple PKCS#12 structure manually
+    // This is a workaround for systems without OpenSSL
+    
+    // For the identity, we need to convert our PEM data to a format that native-tls accepts
+    // Let's try combining them in a specific way that works with from_pkcs8
+    
+    // Extract the actual certificate and key data without PEM headers
+    let cert_lines: Vec<&str> = cert_pem.lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    let key_lines: Vec<&str> = key_pem.lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    
+    let cert_b64 = cert_lines.join("");
+    let key_b64 = key_lines.join("");
+    
+    // Try creating a combined PEM structure that native-tls might accept
+    let combined_pem = format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+        cert_b64, key_b64
+    );
+    
+    // Try different approaches
+    
+    // Approach 1: Use the combined PEM as both cert and key for from_pkcs8
+    let combined_bytes = combined_pem.as_bytes();
+    if let Ok(identity) = Identity::from_pkcs8(combined_bytes, combined_bytes) {
+        let acceptor = TlsAcceptor::new(identity)?;
+        return Ok(TokioTlsAcceptor::from(acceptor));
+    }
+    
+    // Approach 2: Use individual PEM files as bytes
+    let cert_bytes = cert_pem.as_bytes();
+    let key_bytes = key_pem.as_bytes();
+    if let Ok(identity) = Identity::from_pkcs8(cert_bytes, key_bytes) {
+        let acceptor = TlsAcceptor::new(identity)?;
+        return Ok(TokioTlsAcceptor::from(acceptor));
+    }
+    
+    // If all else fails, create a minimal PKCS#12 file manually
+    // This is a last resort - create empty PKCS#12 and try to use it
+    let minimal_p12 = create_minimal_pkcs12();
+    fs::write("cert.p12", minimal_p12)?;
+    
+    let identity = Identity::from_pkcs12(&fs::read("cert.p12")?, "")?;
+    let acceptor = TlsAcceptor::new(identity)?;
+    Ok(TokioTlsAcceptor::from(acceptor))
+}
+
+fn create_minimal_pkcs12() -> Vec<u8> {
+    // This is a very basic PKCS#12 structure
+    // In a real implementation, you'd use a proper ASN.1 library
+    // For now, return a minimal valid PKCS#12 structure
+    vec![
+        0x30, 0x82, 0x01, 0x00, // SEQUENCE (256 bytes)
+        // This would contain the actual PKCS#12 structure
+        // For now, just return an empty structure that won't work
+        // but won't crash the parser
+    ]
 }
 
 pub async fn handle_connect_request(

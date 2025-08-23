@@ -13,12 +13,24 @@ pub fn init_logging(log_level: &str, log_file: Option<&str>) -> Result<()> {
         .or_else(|_| EnvFilter::try_new("info"))
         .unwrap();
 
-    let stdout_layer = fmt::layer()
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_file(true)
-        .with_line_number(true)
-        .pretty();
+    // Configure stdout layer based on build mode
+    let stdout_layer = if cfg!(debug_assertions) {
+        // Debug mode: show file/line info with compact format for single-line output
+        fmt::layer()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_file(true)
+            .with_line_number(true)
+            .compact()
+    } else {
+        // Release mode: hide file/line info
+        fmt::layer()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_file(false)
+            .with_line_number(false)
+            .compact()
+    };
 
     match log_file {
         Some(file_path) => {
@@ -30,13 +42,26 @@ pub fn init_logging(log_level: &str, log_file: Option<&str>) -> Result<()> {
             let file_appender = rolling::daily(log_dir, "rrproxy.log");
             let (non_blocking_file, _guard) = non_blocking(file_appender);
             
-            let file_layer = fmt::layer()
-                .with_target(true)
-                .with_thread_ids(true)
-                .with_file(true)
-                .with_line_number(true)
-                .json()
-                .with_writer(non_blocking_file);
+            // Configure file layer based on build mode
+            let file_layer = if cfg!(debug_assertions) {
+                // Debug mode: show file/line info
+                fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .json()
+                    .with_writer(non_blocking_file)
+            } else {
+                // Release mode: hide file/line info
+                fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(true)
+                    .with_file(false)
+                    .with_line_number(false)
+                    .json()
+                    .with_writer(non_blocking_file)
+            };
 
             tracing_subscriber::registry()
                 .with(filter)
