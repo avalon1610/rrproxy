@@ -19,6 +19,11 @@ RRProxy consists of two main components:
 - ✅ Async/await support with Tokio
 - ✅ Command-line interface
 - ✅ Firewall proxy support (HTTP, HTTPS, SOCKS5)
+- ✅ Configurable logging levels (trace, debug, info, warn, error)
+- ✅ File logging with daily rotation
+- ✅ Structured JSON logs for production use
+- ✅ Request/response timing and metrics
+- ✅ Comprehensive error tracking
 
 ## Architecture
 
@@ -47,6 +52,8 @@ Options:
 - `--remote-addr`: Remote proxy address (default: http://127.0.0.1:8081)
 - `--chunk-size`: Size of chunks in bytes (default: 10240)
 - `--firewall-proxy`: Optional firewall proxy URL (e.g., http://proxy.company.com:8080)
+- `--log-level`: Log level - trace, debug, info, warn, error (default: info)
+- `--log-file`: Optional log file path for file logging with daily rotation
 
 ### Remote Proxy
 
@@ -58,6 +65,8 @@ cargo run -- remote --listen-addr 127.0.0.1:8081
 
 Options:
 - `--listen-addr`: Address to listen on (default: 127.0.0.1:8081)
+- `--log-level`: Log level - trace, debug, info, warn, error (default: info)
+- `--log-file`: Optional log file path for file logging with daily rotation
 
 ## How It Works
 
@@ -139,16 +148,87 @@ cargo run -- local --listen-addr 127.0.0.1:8080 --remote-addr http://remote-serv
 cargo run -- local --listen-addr 127.0.0.1:8080 --remote-addr http://remote-server:8081 --firewall-proxy http://username:password@proxy.company.com:8080
 ```
 
+### Example 4: Enhanced Logging
+```bash
+# Debug logging to console
+cargo run -- local --log-level debug
+
+# Production logging to file with rotation
+cargo run -- local --log-level info --log-file logs/rrproxy.log
+
+# Trace everything to both console and file
+cargo run -- remote --log-level trace --log-file logs/remote.log
+```
+
 ## Logging
 
-Set the `RUST_LOG` environment variable to control logging:
+RRProxy provides comprehensive logging with configurable levels and optional file output.
+
+### Log Levels
+
+- `trace`: Most verbose, includes all debug information
+- `debug`: Detailed information for debugging
+- `info`: General information about operations (default)
+- `warn`: Warning messages
+- `error`: Error messages only
+
+### Console Logging
+
+By default, logs are output to the console with pretty formatting:
 
 ```bash
-# Debug level
-RUST_LOG=debug cargo run -- local
+# Default info level
+cargo run -- local
 
-# Info level (default)
-RUST_LOG=info cargo run -- remote
+# Debug level for detailed information
+cargo run -- local --log-level debug
+
+# Error level for minimal output
+cargo run -- remote --log-level error
+```
+
+### File Logging
+
+Enable file logging with daily rotation:
+
+```bash
+# Log to file with daily rotation
+cargo run -- local --log-file logs/rrproxy.log
+
+# Combined console and file logging
+cargo run -- local --log-level debug --log-file logs/rrproxy.log
+```
+
+### Log File Features
+
+- **Daily Rotation**: Log files are automatically rotated daily
+- **JSON Format**: File logs are in structured JSON format for easy parsing
+- **Detailed Metrics**: Includes timing, request/response sizes, transaction IDs
+- **Error Tracking**: Comprehensive error logging with context
+
+### Example Log Output
+
+Console output (pretty format):
+```
+2024-08-23T10:30:15.123Z INFO rrproxy::local_proxy: Processing incoming request
+    method=POST uri=http://example.com/api/data request_size=1024
+```
+
+File output (JSON format):
+```json
+{
+  "timestamp": "2024-08-23T10:30:15.123Z",
+  "level": "INFO",
+  "target": "rrproxy::local_proxy",
+  "fields": {
+    "method": "POST",
+    "uri": "http://example.com/api/data",
+    "request_size": 1024,
+    "duration_ms": 150,
+    "status": 200,
+    "result": "success"
+  }
+}
 ```
 
 ## License
