@@ -1,0 +1,41 @@
+[package]
+name = "rrproxy"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rrproxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rrproxy"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["full"] }
+http-body-util = "0.1.1"
+hyper-util = { version = "0.1.3", features = ["full"] }
+clap = { version = "4.5.4", features = ["derive"] }
+uuid = { version = "1.8.0", features = ["v4"] }
+anyhow = "1.0.86"
+async-trait = "0.1.80"
+bytes = "1.6.0"
+futures-util = "0.3.30"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12.4", features = ["json", "stream"] }
+log = "0.4.21"
+env_logger = "0.11.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "chrono"] }
+tracing-appender = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+http = "1.1.0"
+hyper-tls = "0.6.0"
+tokio-native-tls = "0.3.1"
+native-tls = { version = "0.2.12", features = ["vendored"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+uuid = { version = "1.8.0", features = ["v4"] }
