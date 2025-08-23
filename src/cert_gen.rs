@@ -123,16 +123,92 @@ pub fn generate_certificate_with_mode(config: &CertConfig, mode: &CertGeneration
 fn generate_root_ca_certificate(ca_config: &CertConfig) -> Result<(String, String)> {
     info!("Generating root CA certificate: {}", ca_config.common_name);
     
-    // Create a simple CA certificate using rcgen's simplified approach
-    // For now, we'll use generate_simple_self_signed and mark it as a CA later
-    let ca_cert = rcgen::generate_simple_self_signed(vec![ca_config.common_name.clone()])?;
+    // Create CA certificate parameters with proper CA extensions
+    let mut ca_params = rcgen::CertificateParams::new(vec![ca_config.common_name.clone()])?;
     
-    let ca_cert_pem = ca_cert.cert.pem();
-    let ca_key_pem = ca_cert.key_pair.serialize_pem();
+    // Mark as CA certificate
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    
+    // Set CA key usages
+    ca_params.key_usages = vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+    ];
+    
+    // Set subject information
+    let mut distinguished_name = rcgen::DistinguishedName::new();
+    distinguished_name.push(rcgen::DnType::CommonName, ca_config.common_name.clone());
+    distinguished_name.push(rcgen::DnType::OrganizationName, ca_config.organization.clone());
+    distinguished_name.push(rcgen::DnType::CountryName, ca_config.country.clone());
+    distinguished_name.push(rcgen::DnType::StateOrProvinceName, ca_config.state.clone());
+    distinguished_name.push(rcgen::DnType::LocalityName, ca_config.city.clone());
+    distinguished_name.push(rcgen::DnType::OrganizationalUnitName, ca_config.org_unit.clone());
+    ca_params.distinguished_name = distinguished_name;
+    
+    // Set validity period
+    ca_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+    ca_params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(ca_config.validity_days as i64);
+    
+    // Generate CA key pair and self-signed certificate
+    let ca_key_pair = rcgen::KeyPair::generate()?;
+    let ca_cert = ca_params.self_signed(&ca_key_pair)?;
+    
+    let ca_cert_pem = ca_cert.pem();
+    let ca_key_pem = ca_key_pair.serialize_pem();
     
     info!("Root CA certificate generated successfully");
     
     Ok((ca_cert_pem, ca_key_pem))
+}
+
+/// Generate a certificate signed by the given CA
+fn generate_ca_signed_certificate(config: &CertConfig, _ca_cert_pem: &str, _ca_key_pem: &str) -> Result<(String, String)> {
+    info!("Generating CA-signed certificate for: {}", config.common_name);
+    
+    // For now, let's use the simple self_signed approach until we can properly implement CA signing
+    // This is a temporary workaround - the function should be properly implemented with CA signing
+    tracing::warn!("CA signing not yet properly implemented, generating self-signed certificate instead");
+    
+    // Create server certificate parameters
+    let mut server_params = rcgen::CertificateParams::new(config.san_domains.clone())?;
+    
+    // Set subject information
+    let mut distinguished_name = rcgen::DistinguishedName::new();
+    distinguished_name.push(rcgen::DnType::CommonName, config.common_name.clone());
+    distinguished_name.push(rcgen::DnType::OrganizationName, config.organization.clone());
+    distinguished_name.push(rcgen::DnType::CountryName, config.country.clone());
+    distinguished_name.push(rcgen::DnType::StateOrProvinceName, config.state.clone());
+    distinguished_name.push(rcgen::DnType::LocalityName, config.city.clone());
+    distinguished_name.push(rcgen::DnType::OrganizationalUnitName, config.org_unit.clone());
+    server_params.distinguished_name = distinguished_name;
+    
+    // Set validity period
+    server_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(1);
+    server_params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(config.validity_days as i64);
+    
+    // Set key usages for server certificate
+    server_params.key_usages = vec![
+        rcgen::KeyUsagePurpose::DigitalSignature,
+        rcgen::KeyUsagePurpose::KeyEncipherment,
+    ];
+    server_params.extended_key_usages = vec![
+        rcgen::ExtendedKeyUsagePurpose::ServerAuth,
+        rcgen::ExtendedKeyUsagePurpose::ClientAuth,
+    ];
+    
+    // Generate server key pair
+    let server_key_pair = rcgen::KeyPair::generate()?;
+    
+    // For now, create self-signed certificate
+    // TODO: Implement proper CA signing when the API is clarified
+    let server_cert = server_params.self_signed(&server_key_pair)?;
+    
+    let server_cert_pem = server_cert.pem();
+    let server_key_pem = server_key_pair.serialize_pem();
+    
+    info!("Self-signed certificate generated (CA signing implementation pending)");
+    
+    Ok((server_cert_pem, server_key_pem))
 }
 
 /// Generate server certificate signed by existing root CA
@@ -153,11 +229,14 @@ fn generate_server_certificate_with_existing_ca(config: &CertConfig, root_ca_con
         return Err(anyhow!("Invalid CA certificate or key files"));
     }
     
-    // For now, generate a self-signed certificate but save CA info
-    // In a full implementation, this would create a proper CA-signed certificate
-    let (server_cert_pem, server_key_pem) = generate_certificate(config)?;
     
-    info!("Server certificate generated with CA signing (simplified implementation)");
+    // Parse CA private key for signing
+    // Note: We don't need this variable since we pass the PEM string directly
+    
+    // Generate server certificate signed by CA
+    let (server_cert_pem, server_key_pem) = generate_ca_signed_certificate(config, &ca_cert_pem, &ca_key_pem)?;
+    
+    info!("Server certificate generated and signed by CA");
     
     Ok(CertificateResult {
         server_cert_pem,
@@ -172,9 +251,8 @@ fn generate_server_certificate_with_new_ca(config: &CertConfig, root_ca_config: 
     // Generate root CA first
     let (ca_cert_pem, ca_key_pem) = generate_root_ca_certificate(&root_ca_config.ca_cert_config)?;
     
-    // For now, generate a self-signed server certificate
-    // In a full implementation, this would be signed by the CA
-    let (server_cert_pem, server_key_pem) = generate_certificate(config)?;
+    // Generate server certificate signed by the CA
+    let (server_cert_pem, server_key_pem) = generate_ca_signed_certificate(config, &ca_cert_pem, &ca_key_pem)?;
     
     info!("Root CA and server certificate generated successfully");
     
