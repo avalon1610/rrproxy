@@ -16,13 +16,13 @@ use uuid::Uuid;
 
 #[derive(Parser, Debug, Clone)]
 pub struct LocalProxyConfig {
-    #[clap(long, default_value = "127.0.0.1:8080")]
+    #[clap(short, long, default_value = "127.0.0.1:8080")]
     pub listen_addr: String,
-    #[clap(long, default_value = "http://127.0.0.1:8081")]
+    #[clap(short, long, default_value = "http://127.0.0.1:8081")]
     pub remote_addr: String,
-    #[clap(long, default_value_t = 10240)] // 10KB
+    #[clap(short, long, default_value_t = 10240)] // 10KB
     pub chunk_size: usize,
-    #[clap(long)]
+    #[clap(short, long)]
     pub firewall_proxy: Option<String>,
     #[clap(long, default_value = "info")]
     pub log_level: String,
@@ -138,8 +138,13 @@ async fn forward_single_request(
     body: Bytes,
     config: Arc<LocalProxyConfig>,
 ) -> Result<Response<Full<Bytes>>> {
+    let original_url = parts.uri.to_string();
     let remote_uri: Uri = config.remote_addr.parse()?;
     parts.uri = remote_uri;
+    
+    // Add the original URL as a header so the remote proxy knows where to forward
+    parts.headers.insert("X-Original-Url", original_url.parse()?);
+    
     let req = Request::from_parts(parts, Full::new(body));
     send_to_remote(req, &config).await
 }

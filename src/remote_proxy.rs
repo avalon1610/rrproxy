@@ -18,7 +18,7 @@ use tracing::{debug, info, warn, error};
 
 #[derive(Parser, Debug, Clone)]
 pub struct RemoteProxyConfig {
-    #[clap(long, default_value = "127.0.0.1:8081")]
+    #[clap(short, long, default_value = "127.0.0.1:8081")]
     pub listen_addr: String,
     #[clap(long, default_value = "info")]
     pub log_level: String,
@@ -123,7 +123,13 @@ async fn handle_request(
 async fn forward_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>> {
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
-    let original_url = parts.uri.to_string(); // The URI is the original URL for single requests
+    
+    // Check if there's an X-Original-Url header for the actual target URL
+    let original_url = if let Some(header_value) = parts.headers.get("X-Original-Url") {
+        header_value.to_str()?.to_string()
+    } else {
+        parts.uri.to_string() // Fallback to URI if no header
+    };
     
     debug!(
         method = %parts.method,
