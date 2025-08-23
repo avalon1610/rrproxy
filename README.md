@@ -27,25 +27,27 @@ RRProxy consists of two main components:
 
 ## Architecture
 
+RRProxy has been restructured into a modular architecture with better separation of concerns:
+
+### Request Flow Architecture
+
 For HTTP requests, the architecture is as follows:
 ```
 Client -> (HTTP) -> Local Proxy -> (HTTP) -> [Firewall Proxy] -> (HTTP) -> Remote Proxy -> (HTTP) -> Target Server
-                |                                  |
-                v                                  v
-        [Chunk large                      [Reassemble
-         requests]                         chunks]
+                |                                  |                              |
+                v                                  v                              v
+        [Chunk large                      [Forward all                   [Reassemble
+         requests]                         requests]                      chunks]
 ```
 
 For HTTPS requests, the architecture is as follows:
 ```
 Client -> (HTTPS) -> Local Proxy -> (HTTP) -> [Firewall Proxy] -> (HTTP) -> Remote Proxy -> (HTTPS) -> Target Server
-                |                                  |
-                v                                  v
-        [Chunk large                      [Reassemble
-         requests]                         chunks]
+                |                                  |                              |
+                v                                  v                              v
+        [Terminate TLS,                   [Forward all                   [Reassemble chunks,
+         chunk if needed]                  requests]                      forward to target]
 ```
-
-Note: Firewall proxy is optional and can be configured with `--firewall-proxy` option.
 
 ### Important Note on HTTPS
 Beware that HTTPS requests are tunneled via the CONNECT method, so the local proxy does not see the actual request URL or headers. 
@@ -235,6 +237,154 @@ File output (JSON format):
   }
 }
 ```
+
+## Deployment
+
+### Quick Deployment Guide
+
+1. **Generate SSL/TLS Certificates**
+   ```bash
+   # Linux/macOS
+   cd scripts && chmod +x generate_certs.sh && ./generate_certs.sh
+   
+   # Windows PowerShell
+   cd scripts && powershell -ExecutionPolicy Bypass -File generate_certs.ps1
+   
+   # Windows Command Prompt
+   cd scripts && generate_certs.bat
+   ```
+
+2. **Build for Production**
+   ```bash
+   cargo build --release
+   ```
+
+3. **Deploy Remote Proxy** (on server outside firewall)
+   ```bash
+   ./target/release/rrproxy remote --listen-addr "0.0.0.0:8081" --log-file logs/remote.log
+   ```
+
+4. **Deploy Local Proxy** (on client inside firewall)
+   ```bash
+   ./target/release/rrproxy local --listen-addr "127.0.0.1:8080" --remote-addr "http://server-ip:8081" --log-file logs/local.log
+   ```
+
+5. **Configure Applications**
+   Set applications to use HTTP/HTTPS proxy: `127.0.0.1:8080`
+
+### Certificate Management
+
+The deployment scripts automatically:
+- Generate 2048-bit RSA certificates
+- Include Subject Alternative Names for localhost and 127.0.0.1
+- Set 365-day validity period
+- Backup existing certificates before generating new ones
+
+For production use, replace self-signed certificates with trusted CA certificates.
+
+## Testing
+
+### Unit Tests
+```bash
+cargo test
+```
+
+### Integration Tests
+
+**Test basic internet connectivity through proxy:**
+```bash
+cargo test integration_test_real_internet_request --release -- --ignored
+```
+
+**Test large request chunking functionality:**
+```bash
+cargo test integration_test_large_request_chunking --release -- --ignored
+```
+
+**Test firewall proxy functionality:**
+```bash
+cargo test integration_test_firewall_proxy_functionality --release -- --ignored
+```
+
+**Run all integration tests:**
+```bash
+cargo test --release -- --ignored
+```
+
+**Test firewall proxy with automated script:**
+```bash
+# Linux/macOS
+./scripts/test_firewall_proxy.sh
+
+# Windows
+scripts\test_firewall_proxy.bat
+```
+
+The firewall proxy test verifies:
+- Test firewall proxy receives and forwards requests correctly
+- Local proxy routes through firewall proxy as configured
+- Remote proxy receives and processes chunked requests
+- Large requests are properly chunked and reassembled through the proxy chain
+- Multiple concurrent requests work correctly through firewall proxy
+- End-to-end data integrity is maintained through the entire chain
+
+### Manual Testing
+
+1. Start both proxies as described in deployment
+2. Configure your browser to use `127.0.0.1:8080` as HTTP/HTTPS proxy
+3. Visit websites and verify they load correctly
+4. Test with large POST requests to verify chunking works
+
+### Load Testing
+
+For performance testing, you can use tools like:
+- `curl` for simple requests
+- `ab` (Apache Benchmark) for load testing
+- `wrk` for modern HTTP benchmarking
+
+Example load test:
+```bash
+# Test with Apache Benchmark
+ab -n 1000 -c 10 -X 127.0.0.1:8080 http://httpbin.org/post
+
+# Test large requests with curl
+curl -X POST -H "Content-Type: application/json" \
+     --proxy http://127.0.0.1:8080 \
+     --data '{"large_data":"'$(head -c 50000 /dev/zero | tr '\0' 'x')'"}' \
+     https://httpbin.org/post
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Certificate Errors**
+   - Ensure OpenSSL is installed
+   - Run certificate generation scripts as described above
+   - For testing, use `-k` flag with curl to ignore certificate errors
+
+2. **Connection Refused**
+   - Check if proxy ports are available
+   - Verify firewall settings
+   - Ensure both local and remote proxies are running
+
+3. **Firewall Proxy Issues**
+   - Verify firewall proxy URL format: `http://proxy.company.com:8080`
+   - Test connectivity to firewall proxy directly
+   - Check corporate proxy authentication requirements
+   - For SOCKS5 proxies, use: `socks5://proxy.company.com:1080`
+   - Enable debug logging to see proxy connection attempts
+
+4. **Chunking Issues**
+   - Enable debug logging: `--log-level debug`
+   - Check transaction IDs in logs for chunk tracking
+   - Verify chunk size configuration matches your network requirements
+
+5. **Performance Issues**
+   - Adjust chunk size based on network conditions
+   - Use release builds for production: `cargo build --release`
+   - Monitor logs for timing information
+   - Check firewall proxy performance if configured
 
 ## License
 
