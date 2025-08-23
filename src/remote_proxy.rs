@@ -5,7 +5,7 @@ use clap::Parser;
 use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{body::Incoming, Request, Response};
+use hyper::{body::Incoming, Request, Response, Method};
 use hyper_util::rt::TokioIo;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -13,7 +13,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, warn, error};
 
 #[derive(Parser, Debug, Clone)]
@@ -37,18 +38,220 @@ pub async fn start(config: RemoteProxyConfig) -> Result<()> {
 
     loop {
         let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
         let chunk_store = Arc::clone(&chunk_store);
 
         tokio::task::spawn(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(move |req| handle_request(req, Arc::clone(&chunk_store))))
-                .await
-            {
-                warn!("Error serving connection: {:?}", err);
+            if let Err(err) = handle_raw_connection(stream, chunk_store).await {
+                warn!("Error handling connection: {:?}", err);
             }
         });
     }
+}
+
+async fn handle_raw_connection(mut stream: TcpStream, chunk_store: ChunkStore) -> Result<()> {
+    // Read enough data to determine if it's a CONNECT request
+    let mut buffer = vec![0u8; 1024];
+    let n = stream.read(&mut buffer).await?;
+    
+    if n == 0 {
+        return Ok(());
+    }
+    
+    let request_data = String::from_utf8_lossy(&buffer[..n]);
+    
+    if request_data.starts_with("CONNECT ") {
+        // Handle CONNECT request
+        info!("Handling CONNECT request from local proxy");
+        handle_connect_tunnel(stream, request_data.to_string()).await
+    } else {
+        // Handle HTTP request - reconstruct the stream and use hyper
+        let reconstructed_stream = ReconstructedStream::new(buffer[..n].to_vec(), stream);
+        let io = TokioIo::new(reconstructed_stream);
+        
+        if let Err(err) = http1::Builder::new()
+            .serve_connection(io, service_fn(move |req| handle_request(req, Arc::clone(&chunk_store))))
+            .await
+        {
+            warn!("Error serving HTTP connection: {:?}", err);
+        }
+        Ok(())
+    }
+}
+
+// A simple wrapper to reconstruct a stream from buffered data
+struct ReconstructedStream {
+    buffer: Vec<u8>,
+    position: usize,
+    stream: TcpStream,
+}
+
+impl ReconstructedStream {
+    fn new(buffer: Vec<u8>, stream: TcpStream) -> Self {
+        Self {
+            buffer,
+            position: 0,
+            stream,
+        }
+    }
+}
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+impl AsyncRead for ReconstructedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        // First, serve data from our buffer
+        if self.position < self.buffer.len() {
+            let remaining_buffer = &self.buffer[self.position..];
+            let to_copy = std::cmp::min(remaining_buffer.len(), buf.remaining());
+            buf.put_slice(&remaining_buffer[..to_copy]);
+            self.position += to_copy;
+            return Poll::Ready(Ok(()));
+        }
+        
+        // Then delegate to the underlying stream
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for ReconstructedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+async fn handle_connect_tunnel(mut local_stream: TcpStream, request_data: String) -> Result<()> {
+    // Parse the CONNECT request
+    let lines: Vec<&str> = request_data.lines().collect();
+    if lines.is_empty() {
+        return Err(anyhow!("Empty CONNECT request"));
+    }
+    
+    let first_line = lines[0];
+    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err(anyhow!("Invalid CONNECT request format"));
+    }
+    
+    let target = parts[1];
+    
+    // Look for X-Original-Url header and X-Proxy-Type header
+    let mut actual_target = target;
+    let mut is_https_tunnel = false;
+    
+    for line in &lines {
+        if line.starts_with("X-Original-Url:") {
+            if let Some(url) = line.split(": ").nth(1) {
+                actual_target = url;
+            }
+        } else if line.starts_with("X-Proxy-Type:") {
+            if let Some(proxy_type) = line.split(": ").nth(1) {
+                if proxy_type == "https-tunnel" {
+                    is_https_tunnel = true;
+                }
+            }
+        }
+    }
+    
+    info!("Remote proxy handling CONNECT - target: {}, is_https_tunnel: {}", actual_target, is_https_tunnel);
+    
+    // If we haven't received the complete headers, read more
+    if !request_data.contains("\r\n\r\n") {
+        let mut additional_buffer = vec![0u8; 1024];
+        let n = local_stream.read(&mut additional_buffer).await?;
+        if n > 0 {
+            // We can ignore the additional headers for CONNECT
+        }
+    }
+    
+    // For HTTPS tunnels, we extract the hostname and port from the target
+    let target_host_port = if is_https_tunnel {
+        // Extract hostname from https:// URL or use target directly
+        if actual_target.starts_with("https://") {
+            let url = actual_target.strip_prefix("https://").unwrap_or(actual_target);
+            if url.contains('/') {
+                url.split('/').next().unwrap_or(target)
+            } else {
+                url
+            }
+        } else {
+            target // Use the CONNECT target (e.g., "www.baidu.com:443")
+        }
+    } else {
+        actual_target
+    };
+    
+    info!("Remote proxy establishing connection to target: {}", target_host_port);
+    
+    // Connect to the actual target server
+    let target_stream = match TcpStream::connect(target_host_port).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            error!("Failed to connect to target {}: {}", target_host_port, e);
+            let error_response = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
+            local_stream.write_all(error_response.as_bytes()).await?;
+            return Err(anyhow!("Failed to connect to target: {}", e));
+        }
+    };
+    
+    info!("Successfully connected to target {}", target_host_port);
+    
+    // Send 200 Connection Established to local proxy
+    let success_response = "HTTP/1.1 200 Connection Established\r\n\r\n";
+    local_stream.write_all(success_response.as_bytes()).await?;
+    
+    if is_https_tunnel {
+        info!("Starting HTTPS tunnel between local proxy and {}", target_host_port);
+    } else {
+        info!("Starting tunnel between local proxy and {}", target_host_port);
+    }
+    
+    // Start bidirectional copying between local proxy and target
+    let (mut local_read, mut local_write) = local_stream.into_split();
+    let (mut target_read, mut target_write) = target_stream.into_split();
+    
+    let local_to_target = tokio::io::copy(&mut local_read, &mut target_write);
+    let target_to_local = tokio::io::copy(&mut target_read, &mut local_write);
+    
+    // Run both copy operations concurrently
+    let result = tokio::select! {
+        result1 = local_to_target => {
+            debug!("Local to target copy completed: {:?}", result1);
+            result1
+        }
+        result2 = target_to_local => {
+            debug!("Target to local copy completed: {:?}", result2);
+            result2
+        }
+    };
+    
+    match result {
+        Ok(bytes_copied) => {
+            info!("Tunnel completed for {}, {} bytes transferred", target_host_port, bytes_copied);
+        }
+        Err(e) => {
+            debug!("Tunnel copy error for {}: {}", target_host_port, e);
+        }
+    }
+    
+    Ok(())
 }
 
 async fn handle_request(
@@ -66,6 +269,14 @@ async fn handle_request(
         headers = ?headers,
         "Handling remote request"
     );
+
+    // CONNECT requests are now handled in handle_raw_connection, so we shouldn't get them here
+    if method == Method::CONNECT {
+        warn!("CONNECT request received in HTTP handler - this should not happen");
+        return Ok(Response::builder()
+            .status(400)
+            .body(Full::new(Bytes::from("Bad Request")))?);
+    }
     
     let result = if req.headers().contains_key(TRANSACTION_ID_HEADER) {
         let transaction_id = headers.get(TRANSACTION_ID_HEADER)
@@ -135,11 +346,16 @@ async fn forward_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>
         method = %parts.method,
         original_url = %original_url,
         body_size = %body_bytes.len(),
-        "Forwarding single request to target server"
+        "Forwarding request to target server"
     );
     
     let forward_start = Instant::now();
-    let client = Client::new();
+    
+    // Build reqwest client - it will automatically handle HTTPS if the URL starts with https://
+    let client = Client::builder()
+        .danger_accept_invalid_certs(false) // Accept valid certs only
+        .build()?;
+    
     let result = client.request(parts.method.clone(), &original_url)
         .headers(parts.headers.clone())
         .body(body_bytes.clone())
@@ -170,7 +386,8 @@ async fn forward_request(req: Request<Incoming>) -> Result<Response<Full<Bytes>>
                 request_size = %body_bytes.len(),
                 response_size = %body.len(),
                 duration_ms = %forward_duration.as_millis(),
-                "Single request forwarded successfully"
+                protocol = %if original_url.starts_with("https://") { "HTTPS" } else { "HTTP" },
+                "Request forwarded successfully"
             );
 
             let mut builder = Response::builder().status(status);
@@ -245,7 +462,9 @@ async fn assemble_and_forward(
             );
 
             let forward_start = Instant::now();
-            let client = Client::new();
+            let client = Client::builder()
+                .danger_accept_invalid_certs(false) // Accept valid certs only
+                .build()?;
             let result = client.request(parts.method.clone(), &original_url)
                 .headers(headers.clone())
                 .body(full_body.clone())

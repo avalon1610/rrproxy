@@ -1,6 +1,6 @@
 # RRProxy - Request/Response Proxy
 
-A Rust-based HTTP proxy system that supports chunking large requests for transmission between local and remote components.
+A Rust-based HTTP/HTTPS proxy system that supports chunking large requests for transmission between local and remote components.
 
 ## Overview
 
@@ -18,7 +18,7 @@ RRProxy consists of two main components:
 - ✅ Transaction ID tracking for chunked requests
 - ✅ Async/await support with Tokio
 - ✅ Command-line interface
-- ✅ Firewall proxy support (HTTP, HTTPS, SOCKS5)
+- ✅ Firewall proxy support (HTTP, HTTPS)
 - ✅ Configurable logging levels (trace, debug, info, warn, error)
 - ✅ File logging with daily rotation
 - ✅ Structured JSON logs for production use
@@ -27,8 +27,18 @@ RRProxy consists of two main components:
 
 ## Architecture
 
+For HTTP requests, the architecture is as follows:
 ```
-Client -> Local Proxy -> [Firewall Proxy] -> Remote Proxy -> Target Server
+Client -> (HTTP) -> Local Proxy -> (HTTP) -> [Firewall Proxy] -> (HTTP) -> Remote Proxy -> (HTTP) -> Target Server
+                |                                  |
+                v                                  v
+        [Chunk large                      [Reassemble
+         requests]                         chunks]
+```
+
+For HTTPS requests, the architecture is as follows:
+```
+Client -> (HTTPS) -> Local Proxy -> (HTTP) -> [Firewall Proxy] -> (HTTP) -> Remote Proxy -> (HTTPS) -> Target Server
                 |                                  |
                 v                                  v
         [Chunk large                      [Reassemble
@@ -36,6 +46,11 @@ Client -> Local Proxy -> [Firewall Proxy] -> Remote Proxy -> Target Server
 ```
 
 Note: Firewall proxy is optional and can be configured with `--firewall-proxy` option.
+
+### Important Note on HTTPS
+Beware that HTTPS requests are tunneled via the CONNECT method, so the local proxy does not see the actual request URL or headers. 
+So we need setup a HTTPS server on Local Proxy with (configurable, maybe Self-Signed) certificate to intercept HTTPS requests. then decode its content,
+chunk it if it reaches the chunk size limit, and forward to Remote Proxy (which use http). 
 
 ## Usage
 
@@ -92,16 +107,6 @@ Requests smaller than the chunk size are forwarded as-is without modification.
 - `X-Total-Chunks`: Total number of chunks expected
 - `X-Is-Last-Chunk`: "true" for the final chunk, "false" otherwise
 - `X-Original-Url`: Original request URL preserved during chunking
-
-## Dependencies
-
-- `tokio`: Async runtime
-- `hyper`: HTTP client/server
-- `clap`: Command line parsing
-- `uuid`: Transaction ID generation
-- `reqwest`: HTTP client for forwarding (with proxy support)
-- `anyhow`: Error handling
-- `bytes`: Efficient byte buffer handling
 
 ## Building
 
