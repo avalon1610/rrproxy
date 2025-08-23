@@ -114,18 +114,18 @@ fn test_proxy_config_certificate_options() {
         firewall_proxy: None,
         log_level: "info".to_string(),
         log_file: None,
-        cert_file: "test_cert.pem".to_string(),
-        key_file: "test_key.pem".to_string(),
-        generate_cert: true,
-        cert_common_name: Some("test.local".to_string()),
-        cert_domains: Some(vec!["test.local".to_string(), "*.test.local".to_string()]),
+        ca_cert_file: "test_cert.pem".to_string(),
+        ca_key_file: "test_key.pem".to_string(),
+        generate_ca: true,
+        ca_common_name: "test.local".to_string(),
+        cert_cache_dir: "test_cache".to_string(),
     };
     
-    assert_eq!(config.cert_file, "test_cert.pem");
-    assert_eq!(config.key_file, "test_key.pem");
-    assert!(config.generate_cert);
-    assert_eq!(config.cert_common_name, Some("test.local".to_string()));
-    assert!(config.cert_domains.is_some());
+    assert_eq!(config.ca_cert_file, "test_cert.pem");
+    assert_eq!(config.ca_key_file, "test_key.pem");
+    assert!(config.generate_ca);
+    assert_eq!(config.ca_common_name, "test.local");
+    assert_eq!(config.cert_cache_dir, "test_cache");
 }
 
 #[test]

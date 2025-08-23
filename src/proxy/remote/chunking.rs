@@ -16,10 +16,16 @@ pub async fn handle_request(
     req: Request<Incoming>,
     chunk_store: ChunkStore,
 ) -> Result<Response<Full<Bytes>>> {
-    let _start_time = Instant::now();
+    let start_time = Instant::now();
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers();
+
+    info!(
+        method = %method,
+        uri = %uri,
+        "Processing incoming HTTP request"
+    );
 
     // CONNECT requests are now handled in handle_raw_connection, so we shouldn't get them here
     if method == hyper::Method::CONNECT {
@@ -32,21 +38,45 @@ pub async fn handle_request(
     // Check if this is a chunked request
     let is_chunked = headers.contains_key(TRANSACTION_ID_HEADER);
 
-    if is_chunked {
-        debug!(
+    let result = if is_chunked {
+        info!(
             method = %method,
             uri = %uri,
             "Processing chunked request"
         );
         handle_chunked_request(req, chunk_store).await
     } else {
-        debug!(
+        info!(
             method = %method,
             uri = %uri,
             "Processing single request"
         );
         handle_single_request(req).await
+    };
+
+    let duration = start_time.elapsed();
+    match &result {
+        Ok(response) => {
+            info!(
+                method = %method,
+                uri = %uri,
+                status = %response.status(),
+                duration_ms = %duration.as_millis(),
+                "HTTP request forwarded successfully"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                method = %method,
+                uri = %uri,
+                error = %error,
+                duration_ms = %duration.as_millis(),
+                "HTTP request forwarding failed"
+            );
+        }
     }
+
+    result
 }
 
 async fn handle_chunked_request(
@@ -149,6 +179,7 @@ async fn handle_chunked_request(
                 transaction_id = %transaction_id,
                 reassembled_size = %reassembled_body.len(),
                 original_url = %original_url,
+                method = %parts.method,
                 "Request reassembled, forwarding to target"
             );
 
@@ -185,7 +216,7 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
     let method = req.method().clone();
     let uri = req.uri().clone();
     
-    debug!(
+    info!(
         method = %method,
         uri = %uri,
         "Processing single request from local proxy"
@@ -194,24 +225,28 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
 
+    let request_size = body_bytes.len();
+
     // Check if this request came from local proxy (has X-Original-Url header)
     let target_url = if let Some(original_url) = parts.headers.get(ORIGINAL_URL_HEADER) {
         let url = original_url.to_str()
             .map_err(|_| anyhow!("Invalid X-Original-Url header"))?
             .to_string();
-        debug!(
+        info!(
             method = %method,
             original_uri = %uri,
             target_url = %url,
-            "Using X-Original-Url for target"
+            request_size = %request_size,
+            "Forwarding request to target URL"
         );
         url
     } else {
         // Direct request to remote proxy (not from local proxy)
         let url = parts.uri.to_string();
-        debug!(
+        info!(
             method = %method,
             uri = %uri,
+            request_size = %request_size,
             "Direct request to remote proxy, using request URI"
         );
         url
@@ -243,7 +278,7 @@ async fn forward_request_to_target(
     let duration = start_time.elapsed();
     
     let status = response.status();
-    debug!(
+    info!(
         status = %status,
         duration_ms = %duration.as_millis(),
         "Response received from target server"
@@ -258,7 +293,7 @@ async fn forward_request_to_target(
 
     let response_body = response.bytes().await?;
     
-    debug!(
+    info!(
         response_size = %response_body.len(),
         "Response body received from target"
     );

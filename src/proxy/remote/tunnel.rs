@@ -36,7 +36,11 @@ pub async fn handle_connect_tunnel(mut local_stream: TcpStream, request_data: St
         }
     }
     
-    info!("Remote proxy handling CONNECT - target: {}, is_https_tunnel: {}", actual_target, is_https_tunnel);
+    info!(
+        target = %actual_target,
+        is_https_tunnel = %is_https_tunnel,
+        "Remote proxy handling CONNECT request"
+    );
     
     // If we haven't received the complete headers, read more
     if !request_data.contains("\r\n\r\n") {
@@ -64,7 +68,10 @@ pub async fn handle_connect_tunnel(mut local_stream: TcpStream, request_data: St
         actual_target
     };
     
-    info!("Remote proxy establishing connection to target: {}", target_host_port);
+    info!(
+        target = %target_host_port,
+        "Remote proxy establishing connection to target"
+    );
     
     // Connect to the actual target server
     let target_stream = match TcpStream::connect(target_host_port).await {
@@ -77,16 +84,25 @@ pub async fn handle_connect_tunnel(mut local_stream: TcpStream, request_data: St
         }
     };
     
-    info!("Successfully connected to target {}", target_host_port);
+    info!(
+        target = %target_host_port,
+        "Successfully connected to target"
+    );
     
     // Send 200 Connection Established to local proxy
     let success_response = "HTTP/1.1 200 Connection Established\r\n\r\n";
     local_stream.write_all(success_response.as_bytes()).await?;
     
     if is_https_tunnel {
-        info!("Starting HTTPS tunnel between local proxy and {}", target_host_port);
+        info!(
+            target = %target_host_port,
+            "Starting HTTPS tunnel between local proxy and target"
+        );
     } else {
-        info!("Starting tunnel between local proxy and {}", target_host_port);
+        info!(
+            target = %target_host_port,
+            "Starting tunnel between local proxy and target"
+        );
     }
     
     // Start bidirectional copying between local proxy and target
@@ -110,10 +126,18 @@ pub async fn handle_connect_tunnel(mut local_stream: TcpStream, request_data: St
     
     match result {
         Ok(bytes_copied) => {
-            info!("Tunnel completed for {}, {} bytes transferred", target_host_port, bytes_copied);
+            info!(
+                target = %target_host_port,
+                bytes_transferred = %bytes_copied,
+                "Tunnel completed"
+            );
         }
         Err(e) => {
-            debug!("Tunnel copy error for {}: {}", target_host_port, e);
+            debug!(
+                target = %target_host_port,
+                error = %e,
+                "Tunnel copy error"
+            );
         }
     }
     

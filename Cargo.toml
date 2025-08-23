@@ -39,6 +39,7 @@ rcgen = "0.13"
 rsa = "0.9"
 x509-parser = "0.16"
 time = "0.3"
+tempfile = "3.0"
 
 [dev-dependencies]
 tokio-test = "0.4"

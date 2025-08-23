@@ -3,6 +3,7 @@ pub mod common;
 pub mod logging;
 pub mod utils;
 pub mod cert_gen;
+pub mod cert_cache;
 
 // Re-export for backward compatibility
 pub mod local_proxy {
