@@ -1,14 +1,14 @@
+use super::config::LocalProxyConfig;
+use crate::common::*;
+use crate::log_debug_request;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
-use hyper::{HeaderMap, Method, body::Incoming, Request, Response};
 use http_body_util::{BodyExt, Full};
+use hyper::{body::Incoming, HeaderMap, Method, Request, Response};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 use uuid::Uuid;
-use crate::common::*;
-use super::config::LocalProxyConfig;
-use crate::log_debug_request;
 
 pub async fn chunk_and_send_request(
     parts: hyper::http::request::Parts,
@@ -22,7 +22,7 @@ pub async fn chunk_and_send_request(
 
     let transaction_id = Uuid::new_v4().to_string();
     let chunk_size = config.chunk_size;
-    let total_chunks = (body_bytes.len() + chunk_size - 1) / chunk_size;
+    let total_chunks = body_bytes.len().div_ceil(chunk_size);
 
     info!(
         method = %method,
@@ -110,7 +110,7 @@ pub async fn forward_single_request(
     // Add the original URL header so remote proxy knows where to forward
     headers.insert(ORIGINAL_URL_HEADER, uri.to_string().parse()?);
 
-    // Send to remote proxy (remote proxy will use X-Original-Url) 
+    // Send to remote proxy (remote proxy will use X-Original-Url)
     let response = send_single_request(
         method.clone(),
         config.remote_addr.parse()?,
@@ -131,6 +131,7 @@ pub async fn forward_single_request(
     Ok(response)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_chunk(
     method: Method,
     uri: hyper::Uri,
@@ -258,18 +259,18 @@ pub async fn handle_connect_request(
 ) -> Result<Response<Full<Bytes>>> {
     let uri = req.uri().clone();
     let target_host = uri.to_string();
-    
+
     info!(
         method = "CONNECT",
         target = %target_host,
         "Handling CONNECT request for HTTPS tunnel"
     );
-    
+
     // For CONNECT requests, we forward the request to the remote proxy
     // The remote proxy will establish the connection to the target server
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
-    
+
     forward_single_request(parts, body_bytes, config).await
 }
 
@@ -281,23 +282,23 @@ mod tests {
     fn test_chunking_logic() {
         let body = Bytes::from("Hello, World! This is a test message that should be chunked.");
         let chunk_size = 10;
-        
+
         // Simulate chunking logic
         let mut chunks = Vec::new();
         let mut start = 0;
-        
+
         while start < body.len() {
             let end = std::cmp::min(start + chunk_size, body.len());
             chunks.push(body.slice(start..end));
             start = end;
         }
-        
+
         assert!(chunks.len() > 1); // Should be chunked
-        
+
         // Verify total length matches original
         let total_len: usize = chunks.iter().map(|c| c.len()).sum();
         assert_eq!(total_len, body.len());
-        
+
         // Verify chunks are correct size (except possibly the last one)
         for (i, chunk) in chunks.iter().enumerate() {
             if i < chunks.len() - 1 {
@@ -312,17 +313,17 @@ mod tests {
     fn test_small_body_no_chunking() {
         let body = Bytes::from("Hi");
         let chunk_size = 10;
-        
+
         // Small body should not be chunked
         let mut chunks = Vec::new();
         let mut start = 0;
-        
+
         while start < body.len() {
             let end = std::cmp::min(start + chunk_size, body.len());
             chunks.push(body.slice(start..end));
             start = end;
         }
-        
+
         assert_eq!(chunks.len(), 1); // Should not be chunked
         assert_eq!(chunks[0], body);
     }

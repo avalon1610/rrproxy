@@ -1,7 +1,7 @@
-use tokio::net::TcpStream;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 
 /// A simple wrapper to reconstruct a stream from buffered data
 pub struct ReconstructedStream {
@@ -34,7 +34,7 @@ impl AsyncRead for ReconstructedStream {
             self.position += to_copy;
             return Poll::Ready(Ok(()));
         }
-        
+
         // Then delegate to the underlying stream
         Pin::new(&mut self.stream).poll_read(cx, buf)
     }
@@ -49,11 +49,17 @@ impl AsyncWrite for ReconstructedStream {
         Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.stream).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }

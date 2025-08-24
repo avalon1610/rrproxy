@@ -78,12 +78,14 @@ impl Default for CertConfig {
 
 impl Default for RootCaConfig {
     fn default() -> Self {
-        let mut ca_config = CertConfig::default();
-        ca_config.common_name = "Local Proxy Root CA".to_string();
-        ca_config.organization = "Local Proxy CA".to_string();
-        ca_config.org_unit = "Certificate Authority".to_string();
-        ca_config.validity_days = 3650; // 10 years for CA
-        ca_config.san_domains = vec![];
+        let ca_config = CertConfig {
+            common_name: "Local Proxy Root CA".to_string(),
+            organization: "Local Proxy CA".to_string(),
+            org_unit: "Certificate Authority".to_string(),
+            validity_days: 3650, // 10 years for CA
+            san_domains: vec![],
+            ..Default::default()
+        };
 
         Self {
             ca_cert_path: None,
@@ -693,7 +695,7 @@ mod tests {
     // Check if OpenSSL is available for testing
     fn openssl_available() -> bool {
         std::process::Command::new("openssl")
-            .args(&["version"])
+            .args(["version"])
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)

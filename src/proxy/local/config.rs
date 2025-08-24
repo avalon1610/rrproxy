@@ -14,7 +14,7 @@ pub struct LocalProxyConfig {
     pub log_level: String,
     #[clap(long)]
     pub log_file: Option<String>,
-    
+
     // Root CA certificate options for dynamic certificate generation
     #[clap(long, default_value = "cert.ca.pem")]
     pub ca_cert_file: String,
@@ -47,7 +47,7 @@ mod tests {
             ca_common_name: "Local Proxy Root CA".to_string(),
             cert_cache_dir: "cert_cache".to_string(),
         };
-        
+
         assert_eq!(config.listen_addr, "127.0.0.1:8080");
         assert_eq!(config.remote_addr, "http://127.0.0.1:8081");
         assert_eq!(config.chunk_size, 1024);
@@ -76,8 +76,11 @@ mod tests {
             ca_common_name: "Local Proxy Root CA".to_string(),
             cert_cache_dir: "cert_cache".to_string(),
         };
-        
-        assert_eq!(config.firewall_proxy, Some("http://proxy.company.com:8080".to_string()));
+
+        assert_eq!(
+            config.firewall_proxy,
+            Some("http://proxy.company.com:8080".to_string())
+        );
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.log_file, Some("rrproxy.log".to_string()));
     }
@@ -97,7 +100,7 @@ mod tests {
             ca_common_name: "Custom Root CA".to_string(),
             cert_cache_dir: "custom_cache".to_string(),
         };
-        
+
         assert_eq!(config.ca_cert_file, "custom_ca_cert.pem");
         assert_eq!(config.ca_key_file, "custom_ca_key.pem");
         assert!(config.generate_ca);

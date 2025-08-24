@@ -174,12 +174,14 @@ impl DynamicCertificateManager {
         hostname: &str,
     ) -> Result<CachedCertificate> {
         // Create certificate configuration for this hostname
-        let mut cert_config = CertConfig::default();
-        cert_config.common_name = hostname.to_string();
-        cert_config.san_domains = vec![hostname.to_string()];
+        let mut cert_config = CertConfig {
+            common_name: hostname.to_string(),
+            san_domains: vec![hostname.to_string()],
+            ..Default::default()
+        };
 
         // Add www variant if it's a domain (not an IP)
-        if !hostname.parse::<std::net::IpAddr>().is_ok() && !hostname.starts_with("www.") {
+        if hostname.parse::<std::net::IpAddr>().is_err() && !hostname.starts_with("www.") {
             cert_config.san_domains.push(format!("www.{}", hostname));
         }
 

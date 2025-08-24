@@ -269,17 +269,14 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
     };
 
     let mut req_builder = reqwest::Client::new().request(parts.method.clone(), target_url);
-    debug!("req_builder: {:?}", req_builder);
 
     // Copy headers (except our internal ones)
     for (name, value) in parts.headers.iter() {
         debug!("original header: {}: {:?}", name, value);
-        if !is_reserved_header(name.as_str()) && name.as_str().to_ascii_lowercase() != "host" {
+        if !is_reserved_header(name.as_str()) && !name.as_str().eq_ignore_ascii_case("host") {
             req_builder = req_builder.header(name, value);
         }
     }
-
-    debug!("req_builder: {:?}", req_builder);
 
     req_builder = req_builder.body(body_bytes.to_vec());
 

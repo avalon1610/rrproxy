@@ -1,12 +1,12 @@
-pub mod proxy;
+pub mod cert_cache;
+pub mod cert_gen;
 pub mod common;
 pub mod logging;
+pub mod proxy;
 pub mod utils;
-pub mod cert_gen;
-pub mod cert_cache;
 
-use clap::Parser;
 use anyhow::Result;
+use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

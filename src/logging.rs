@@ -161,7 +161,7 @@ macro_rules! log_debug_request {
             method = %$method,
             uri = %$uri,
             headers = ?$headers,
-            body_info = %crate::logging::format_body_info(&$body),
+            body_info = %$crate::logging::format_body_info(&$body),
             "Full request details"
         );
     };
@@ -175,7 +175,7 @@ macro_rules! log_debug_response {
             uri = %$uri,
             status = %$status,
             headers = ?$headers,
-            body_info = %crate::logging::format_body_info(&$body),
+            body_info = %$crate::logging::format_body_info(&$body),
             "Full response details"
         );
     };
@@ -210,7 +210,7 @@ fn is_likely_text(bytes: &[u8]) -> bool {
     // Check if mostly printable ASCII or common UTF-8 patterns
     let printable_count = bytes
         .iter()
-        .filter(|&&b| b >= 32 && b <= 126 || b == 9 || b == 10 || b == 13)
+        .filter(|&&b| (32..=126).contains(&b) || b == 9 || b == 10 || b == 13)
         .count();
 
     let printable_ratio = printable_count as f64 / bytes.len() as f64;
