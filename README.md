@@ -174,10 +174,34 @@ RRProxy provides comprehensive logging with configurable levels and optional fil
 ### Log Levels
 
 - `trace`: Most verbose, includes all debug information
-- `debug`: Detailed information for debugging
+- `debug`: Detailed information for debugging, **includes full request/response details**
 - `info`: General information about operations (default)
 - `warn`: Warning messages
 - `error`: Error messages only
+
+### Debug Level Request/Response Logging
+
+When using `debug` log level, RRProxy will log complete request and response details including:
+
+- **Request Headers**: All HTTP headers from incoming requests
+- **Request Body**: Full body content for text data, or size for binary data
+- **Response Headers**: All HTTP headers from responses
+- **Response Body**: Full body content for text data, or size for binary data
+
+**Note**: Large text bodies are truncated to 1000 characters to prevent log overflow.
+
+### Dependency Log Filtering
+
+By default, RRProxy filters out logs from dependency crates (hyper, reqwest, tokio, etc.) to keep logs clean and focused on application logic. To see all logs including dependencies, set the environment variable:
+
+```bash
+# Windows
+set RRPROXY_SHOW_DEPS=1
+cargo run -- local --log-level debug
+
+# Linux/macOS
+RRPROXY_SHOW_DEPS=1 cargo run -- local --log-level debug
+```
 
 ### Console Logging
 

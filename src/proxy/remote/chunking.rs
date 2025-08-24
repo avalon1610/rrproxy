@@ -9,6 +9,7 @@ use hyper::{body::Incoming, Request, Response};
 use http_body_util::{BodyExt, Full};
 
 use crate::common::*;
+use crate::log_debug_request;
 
 pub type ChunkStore = Arc<Mutex<HashMap<String, Vec<(usize, Bytes)>>>>;
 
@@ -127,6 +128,10 @@ async fn handle_chunked_request(
     let (parts, body) = req.into_parts();
     let chunk_bytes = body.collect().await?.to_bytes();
 
+    // Log detailed chunk information at debug level
+    let original_uri: hyper::Uri = original_url.parse().unwrap_or_else(|_| "/".parse().unwrap());
+    log_debug_request!(parts.method, original_uri, parts.headers, chunk_bytes);
+
     debug!(
         transaction_id = %transaction_id,
         chunk_index = %chunk_index,
@@ -225,6 +230,9 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
 
+    // Log detailed request information at debug level
+    log_debug_request!(method, uri, parts.headers, body_bytes);
+
     let request_size = body_bytes.len();
 
     // Check if this request came from local proxy (has X-Original-Url header)
@@ -278,6 +286,7 @@ async fn forward_request_to_target(
     let duration = start_time.elapsed();
     
     let status = response.status();
+    let response_headers = response.headers().clone();
     info!(
         status = %status,
         duration_ms = %duration.as_millis(),
@@ -287,7 +296,7 @@ async fn forward_request_to_target(
     let mut builder = Response::builder().status(status);
 
     // Copy response headers
-    for (name, value) in response.headers().iter() {
+    for (name, value) in response_headers.iter() {
         builder = builder.header(name, value);
     }
 
@@ -296,6 +305,14 @@ async fn forward_request_to_target(
     info!(
         response_size = %response_body.len(),
         "Response body received from target"
+    );
+
+    // Log detailed response information at debug level
+    tracing::debug!(
+        status = %status,
+        headers = ?response_headers,
+        body_info = %crate::logging::format_body_info(&response_body),
+        "Full response details from target server"
     );
 
     Ok(builder.body(Full::new(response_body))?)

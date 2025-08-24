@@ -17,6 +17,7 @@ use super::chunking::{chunk_and_send_request, forward_single_request, handle_con
 use super::dynamic_tls::DynamicTlsHandler;
 use crate::utils::stream::ReconstructedStream;
 use crate::cert_gen::{self, CertConfig, CertGenerationMode, RootCaConfig};
+use crate::log_debug_request;
 
 pub async fn start(config: LocalProxyConfig) -> Result<()> {
     // Handle certificate generation or validation
@@ -99,6 +100,9 @@ async fn handle_http_request(
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
 
+    // Log detailed request information at debug level
+    log_debug_request!(method, uri, parts.headers, body_bytes);
+
     let request_size = body_bytes.len();
     debug!(
         method = %method,
@@ -131,6 +135,15 @@ async fn handle_http_request(
     let duration = start_time.elapsed();
     match &result {
         Ok(response) => {
+            // Log detailed response information at debug level - we can't easily access body here without consuming it
+            tracing::debug!(
+                method = %method,
+                uri = %uri,
+                status = %response.status(),
+                headers = ?response.headers(),
+                "HTTP response details"
+            );
+            
             info!(
                 method = %method,
                 uri = %uri,

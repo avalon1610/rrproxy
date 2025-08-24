@@ -9,9 +9,29 @@ use tracing_subscriber::{
 };
 
 pub fn init_logging(log_level: &str, log_file: Option<&str>) -> Result<()> {
-    let filter = EnvFilter::try_new(log_level)
-        .or_else(|_| EnvFilter::try_new("info"))
-        .unwrap();
+    // Check if user specifically wants to see dependency logs
+    let show_deps = std::env::var("RRPROXY_SHOW_DEPS").is_ok();
+    
+    let filter = if show_deps {
+        // Show all logs if user explicitly requested
+        EnvFilter::try_new(log_level)
+            .or_else(|_| EnvFilter::try_new("info"))
+            .unwrap()
+    } else {
+        // Filter out dependency crate logs, only show our own
+        let base_filter = EnvFilter::try_new(log_level)
+            .or_else(|_| EnvFilter::try_new("info"))
+            .unwrap()
+            .add_directive("rrproxy=trace".parse().unwrap())
+            .add_directive("hyper=warn".parse().unwrap())
+            .add_directive("reqwest=warn".parse().unwrap())
+            .add_directive("tokio=warn".parse().unwrap())
+            .add_directive("rustls=warn".parse().unwrap())
+            .add_directive("h2=warn".parse().unwrap())
+            .add_directive("tower=warn".parse().unwrap())
+            .add_directive("tracing=warn".parse().unwrap());
+        base_filter
+    };
 
     // Configure stdout layer based on build mode
     let stdout_layer = if cfg!(debug_assertions) {
@@ -148,4 +168,66 @@ macro_rules! log_assembly_complete {
             "Request assembly completed"
         );
     };
+}
+
+#[macro_export]
+macro_rules! log_debug_request {
+    ($method:expr, $uri:expr, $headers:expr, $body:expr) => {
+        tracing::debug!(
+            method = %$method,
+            uri = %$uri,
+            headers = ?$headers,
+            body_info = %crate::logging::format_body_info(&$body),
+            "Full request details"
+        );
+    };
+}
+
+#[macro_export]
+macro_rules! log_debug_response {
+    ($method:expr, $uri:expr, $status:expr, $headers:expr, $body:expr) => {
+        tracing::debug!(
+            method = %$method,
+            uri = %$uri,
+            status = %$status,
+            headers = ?$headers,
+            body_info = %crate::logging::format_body_info(&$body),
+            "Full response details"
+        );
+    };
+}
+
+/// Helper function to format body information
+pub fn format_body_info(body: &[u8]) -> String {
+    if body.is_empty() {
+        return "empty".to_string();
+    }
+    
+    // Try to detect if it's text
+    if is_likely_text(body) {
+        // Limit text output to reasonable size
+        let text = String::from_utf8_lossy(body);
+        if text.len() <= 1000 {
+            format!("text({} bytes): {}", body.len(), text)
+        } else {
+            format!("text({} bytes): {}...", body.len(), &text[..1000])
+        }
+    } else {
+        format!("binary({} bytes)", body.len())
+    }
+}
+
+/// Simple heuristic to detect if bytes are likely text
+fn is_likely_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    
+    // Check if mostly printable ASCII or common UTF-8 patterns
+    let printable_count = bytes.iter()
+        .filter(|&&b| b >= 32 && b <= 126 || b == 9 || b == 10 || b == 13)
+        .count();
+    
+    let printable_ratio = printable_count as f64 / bytes.len() as f64;
+    printable_ratio > 0.7 // Consider text if >70% printable
 }

@@ -8,6 +8,7 @@ use tracing::{debug, info, error};
 use uuid::Uuid;
 use crate::common::*;
 use super::config::LocalProxyConfig;
+use crate::log_debug_request;
 
 pub async fn chunk_and_send_request(
     parts: hyper::http::request::Parts,
@@ -32,6 +33,9 @@ pub async fn chunk_and_send_request(
         total_chunks = %total_chunks,
         "Chunking large request"
     );
+
+    // Log detailed request information at debug level
+    log_debug_request!(method, uri, headers, body_bytes);
 
     // Send chunks
     let mut chunk_index = 0;
@@ -99,6 +103,9 @@ pub async fn forward_single_request(
         body_size = %body_bytes.len(),
         "Forwarding single request to remote proxy"
     );
+
+    // Log detailed request information at debug level
+    log_debug_request!(method, uri, headers, body_bytes);
 
     // Add the original URL header so remote proxy knows where to forward
     headers.insert(ORIGINAL_URL_HEADER, uri.to_string().parse()?);
@@ -194,6 +201,7 @@ async fn send_single_request(
     match result {
         Ok(response) => {
             let status = response.status();
+            let response_headers = response.headers().clone();
             debug!(
                 method = %method,
                 remote_uri = %remote_uri,
@@ -205,7 +213,7 @@ async fn send_single_request(
             let mut builder = hyper::Response::builder().status(status);
 
             // Copy headers
-            for (name, value) in response.headers().iter() {
+            for (name, value) in response_headers.iter() {
                 builder = builder.header(name, value);
             }
 
@@ -217,6 +225,16 @@ async fn send_single_request(
                 remote_uri = %remote_uri,
                 response_size = %response_body.len(),
                 "Response body received"
+            );
+
+            // Log detailed response information at debug level
+            tracing::debug!(
+                method = %method,
+                uri = %remote_uri,
+                status = %status,
+                headers = ?response_headers,
+                body_info = %crate::logging::format_body_info(&response_body),
+                "Full response details from remote proxy"
             );
 
             Ok(builder.body(Full::new(response_body))?)

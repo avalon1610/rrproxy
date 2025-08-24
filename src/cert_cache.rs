@@ -18,8 +18,8 @@ pub struct CachedCertificate {
 #[derive(Debug)]
 pub struct DynamicCertificateManager {
     cache_dir: PathBuf,
-    // ca_cert_pem: String,
-    // ca_key_pem: String,
+    ca_cert_pem: String,
+    ca_key_pem: String,
     memory_cache: Arc<RwLock<HashMap<String, CachedCertificate>>>,
 }
 
@@ -48,8 +48,8 @@ impl DynamicCertificateManager {
 
         Ok(Self {
             cache_dir: cache_path,
-            // ca_cert_pem,
-            // ca_key_pem,
+            ca_cert_pem,
+            ca_key_pem,
             memory_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -157,6 +157,7 @@ impl DynamicCertificateManager {
 
         // Generate certificate using our CA (for now, simplified as self-signed)
         // TODO: In a full implementation, this would use the actual CA to sign the certificate
+        // Generate certificate signed by the loaded CA
         let result = self.generate_certificate_with_ca(&cert_config)?;
         
         Ok(CachedCertificate {
@@ -166,14 +167,12 @@ impl DynamicCertificateManager {
         })
     }
 
-    /// Generate certificate using the root CA (simplified implementation)
+    /// Generate certificate using the root CA
     fn generate_certificate_with_ca(&self, config: &CertConfig) -> Result<(String, String)> {
-        // For now, we'll generate a self-signed certificate
-        // In a full implementation, this would use the CA to sign the certificate properly
-        // The CA cert and key are stored in self.ca_cert_pem and self.ca_key_pem for future use
+        debug!("Generating CA-signed certificate for domains: {:?}", config.san_domains);
         
-        debug!("Generating certificate for domains: {:?}", config.san_domains);
-        crate::cert_gen::generate_certificate(config)
+        // Use the CA-aware certificate generation from cert_gen module
+        crate::cert_gen::generate_ca_signed_certificate(config, &self.ca_cert_pem, &self.ca_key_pem)
     }
 
     /// Clear old certificates from cache (both memory and disk)
