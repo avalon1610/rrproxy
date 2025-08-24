@@ -16,7 +16,6 @@ use super::chunking::{chunk_and_send_request, forward_single_request, handle_con
 use super::config::LocalProxyConfig;
 use super::dynamic_tls::DynamicTlsHandler;
 use crate::cert_gen::{self, CertConfig, CertGenerationMode, RootCaConfig};
-use crate::log_debug_request;
 use crate::utils::stream::ReconstructedStream;
 
 pub async fn start(config: LocalProxyConfig) -> Result<()> {
@@ -104,9 +103,6 @@ async fn handle_http_request(
 
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
-
-    // Log detailed request information at debug level
-    log_debug_request!(method, uri, parts.headers, body_bytes);
 
     let request_size = body_bytes.len();
     debug!(

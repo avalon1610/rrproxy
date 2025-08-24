@@ -1,6 +1,9 @@
 use super::config::LocalProxyConfig;
+use super::chunking::{chunk_and_send_request, forward_single_request};
 use crate::cert_cache::{CachedCertificate, DynamicCertificateManager};
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
+use http_body_util::Full;
 use native_tls::{Identity, TlsAcceptor};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -295,35 +298,42 @@ impl DynamicTlsHandler {
         // Parse the original request
         let (method, headers, body) = self.parse_http_request(request_data)?;
 
-        // Create a new HTTP request to send to the remote proxy
-        let client = if let Some(ref firewall_proxy) = config.firewall_proxy {
-            // Use firewall proxy if configured
-            let proxy = reqwest::Proxy::all(firewall_proxy)
-                .map_err(|e| anyhow!("Failed to create firewall proxy: {}", e))?;
-            reqwest::Client::builder()
-                .proxy(proxy)
-                .build()
-                .map_err(|e| anyhow!("Failed to create HTTP client with proxy: {}", e))?
-        } else {
-            reqwest::Client::new()
-        };
+        // Convert to hyper types for using chunking functions
+        let method_hyper: hyper::Method = method.parse().map_err(|e| anyhow!("Invalid HTTP method: {}", e))?;
+        let uri_hyper: hyper::Uri = full_url.parse().map_err(|e| anyhow!("Invalid URI: {}", e))?;
+        let mut request_builder = hyper::Request::builder().method(method_hyper).uri(uri_hyper);
+        
+        // Convert headers
+        for (name, value) in headers {
+            request_builder = request_builder.header(name, value);
+        }
+
+        let body_bytes = Bytes::from(body);
+        let request = request_builder.body(()).map_err(|e| anyhow!("Failed to build request: {}", e))?;
+        let (parts, _) = request.into_parts();
 
         // Check if the request body is large enough to need chunking
-        let body_size = body.len();
-        if body_size > config.chunk_size {
+        let body_size = body_bytes.len();
+        let response = if body_size > config.chunk_size {
             info!(
                 "Request body size ({} bytes) exceeds chunk size ({}), will chunk",
                 body_size, config.chunk_size
             );
-            self.forward_chunked_request(&client, &method, full_url, &headers, &body, config)
-                .await
+            chunk_and_send_request(parts, body_bytes, Arc::new(config.clone())).await
         } else {
             debug!(
                 "Request body size ({} bytes) is within chunk size ({}), sending as single request",
                 body_size, config.chunk_size
             );
-            self.forward_single_request(&client, &method, full_url, &headers, &body, config)
-                .await
+            forward_single_request(parts, body_bytes, Arc::new(config.clone())).await
+        };
+
+        match response {
+            Ok(hyper_response) => {
+                // Convert hyper response back to string format
+                self.convert_hyper_response_to_http(hyper_response).await
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -376,140 +386,16 @@ impl DynamicTlsHandler {
         Ok((method, headers, body))
     }
 
-    /// Forward request as a single request (no chunking)
-    async fn forward_single_request(
-        &self,
-        client: &reqwest::Client,
-        method: &str,
-        url: &str,
-        headers: &[(String, String)],
-        body: &[u8],
-        config: &LocalProxyConfig,
-    ) -> Result<String> {
-        debug!(
-            "Forwarding single request to remote proxy: {}",
-            config.remote_addr
-        );
-
-        let mut request = match method {
-            "GET" => client.get(&config.remote_addr),
-            "POST" => client.post(&config.remote_addr),
-            "PUT" => client.put(&config.remote_addr),
-            "DELETE" => client.delete(&config.remote_addr),
-            "PATCH" => client.patch(&config.remote_addr),
-            _ => client.post(&config.remote_addr), // Default to POST for other methods
-        };
-
-        // Add original URL as a header
-        request = request.header("X-Original-Url", url);
-
-        // Add original headers (excluding problematic ones)
-        for (name, value) in headers {
-            let name_lower = name.to_lowercase();
-            if !name_lower.starts_with("host") && !name_lower.starts_with("content-length") {
-                request = request.header(name, value);
-            }
-        }
-
-        // Add body if present
-        if !body.is_empty() {
-            request = request.body(body.to_vec());
-        }
-
-        // Send the request
-        let response = request
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to forward request to remote proxy: {}", e))?;
-
-        // Convert response back to HTTP format
-        self.convert_response_to_http(response).await
-    }
-
-    /// Forward request as chunked requests
-    async fn forward_chunked_request(
-        &self,
-        client: &reqwest::Client,
-        method: &str,
-        url: &str,
-        headers: &[(String, String)],
-        body: &[u8],
-        config: &LocalProxyConfig,
-    ) -> Result<String> {
-        use uuid::Uuid;
-
-        let transaction_id = Uuid::new_v4().to_string();
-        let chunks: Vec<&[u8]> = body.chunks(config.chunk_size).collect();
-        let total_chunks = chunks.len();
-
-        info!(
-            "Chunking request into {} chunks for transaction {}",
-            total_chunks, transaction_id
-        );
-
-        // Send all chunks
-        for (chunk_index, chunk) in chunks.iter().enumerate() {
-            let is_last_chunk = chunk_index == total_chunks - 1;
-
-            let mut request = client.post(&config.remote_addr);
-
-            // Add chunking headers
-            request = request
-                .header("X-Transaction-Id", &transaction_id)
-                .header("X-Chunk-Index", chunk_index.to_string())
-                .header("X-Total-Chunks", total_chunks.to_string())
-                .header("X-Is-Last-Chunk", is_last_chunk.to_string())
-                .header("X-Original-Url", url)
-                .header("X-Original-Method", method);
-
-            // Add original headers (excluding problematic ones)
-            for (name, value) in headers {
-                let name_lower = name.to_lowercase();
-                if !name_lower.starts_with("host") && !name_lower.starts_with("content-length") {
-                    request = request.header(name, value);
-                }
-            }
-
-            // Add chunk body
-            request = request.body(chunk.to_vec());
-
-            // Send chunk
-            let response = request.send().await.map_err(|e| {
-                anyhow!(
-                    "Failed to send chunk {} to remote proxy: {}",
-                    chunk_index,
-                    e
-                )
-            })?;
-
-            if is_last_chunk {
-                // Return the response from the last chunk
-                return self.convert_response_to_http(response).await;
-            } else {
-                // For non-last chunks, just ensure they were accepted
-                if !response.status().is_success() {
-                    return Err(anyhow!(
-                        "Remote proxy rejected chunk {}: {}",
-                        chunk_index,
-                        response.status()
-                    ));
-                }
-            }
-        }
-
-        Err(anyhow!(
-            "Chunked request completed but no final response received"
-        ))
-    }
-
-    /// Convert reqwest Response to HTTP response string
-    async fn convert_response_to_http(&self, response: reqwest::Response) -> Result<String> {
-        let status = response.status();
-        let headers = response.headers().clone();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| anyhow!("Failed to read response body: {}", e))?;
+    /// Convert hyper Response to HTTP response string
+    async fn convert_hyper_response_to_http(&self, response: hyper::Response<Full<Bytes>>) -> Result<String> {
+        let (parts, body) = response.into_parts();
+        let status = parts.status;
+        let headers = parts.headers;
+        
+        // Get body bytes
+        let body_bytes = http_body_util::BodyExt::collect(body).await
+            .map_err(|e| anyhow!("Failed to read response body: {}", e))?
+            .to_bytes();
 
         // Build HTTP response
         let mut http_response = format!(
@@ -526,11 +412,11 @@ impl DynamicTlsHandler {
         }
 
         // Add content length
-        http_response.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        http_response.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
         http_response.push_str("\r\n");
 
         // Add body
-        http_response.push_str(&String::from_utf8_lossy(&body));
+        http_response.push_str(&String::from_utf8_lossy(&body_bytes));
 
         Ok(http_response)
     }

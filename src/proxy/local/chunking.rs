@@ -1,10 +1,10 @@
 use super::config::LocalProxyConfig;
 use crate::common::*;
-use crate::log_debug_request;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
+use http::header::CONTENT_LENGTH;
 use http_body_util::{BodyExt, Full};
-use hyper::{body::Incoming, HeaderMap, Method, Request, Response};
+use hyper::{body::Incoming, header::HOST, HeaderMap, Method, Request, Response};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
@@ -33,9 +33,6 @@ pub async fn chunk_and_send_request(
         total_chunks = %total_chunks,
         "Chunking large request"
     );
-
-    // Log detailed request information at debug level
-    log_debug_request!(method, uri, headers, body_bytes);
 
     // Send chunks
     let mut chunk_index = 0;
@@ -104,21 +101,12 @@ pub async fn forward_single_request(
         "Forwarding single request to remote proxy"
     );
 
-    // Log detailed request information at debug level
-    log_debug_request!(method, uri, headers, body_bytes);
-
     // Add the original URL header so remote proxy knows where to forward
     headers.insert(ORIGINAL_URL_HEADER, uri.to_string().parse()?);
 
     // Send to remote proxy (remote proxy will use X-Original-Url)
-    let response = send_single_request(
-        method.clone(),
-        config.remote_addr.parse()?,
-        headers,
-        body_bytes,
-        config,
-    )
-    .await?;
+    let response =
+        send_single_request(method.clone(), uri.clone(), headers, body_bytes, config).await?;
 
     let duration = start_time.elapsed();
     debug!(
@@ -151,12 +139,12 @@ async fn send_chunk(
     headers.insert(ORIGINAL_URL_HEADER, uri.to_string().parse()?);
 
     // Send to remote proxy (remote proxy will use X-Original-Url)
-    send_single_request(method, config.remote_addr.parse()?, headers, chunk, config).await
+    send_single_request(method, uri, headers, chunk, config).await
 }
 
 async fn send_single_request(
     method: Method,
-    remote_uri: hyper::Uri,
+    target_uri: hyper::Uri,
     headers: HeaderMap,
     body_bytes: Bytes,
     config: Arc<LocalProxyConfig>,
@@ -165,10 +153,10 @@ async fn send_single_request(
 
     debug!(
         method = %method,
-        remote_uri = %remote_uri,
+        target_uri = %target_uri,
         body_size = %body_bytes.len(),
         firewall_proxy = ?config.firewall_proxy,
-        "Sending request to remote proxy"
+        "Sending single request to remote proxy"
     );
 
     // Build reqwest client with optional proxy
@@ -183,16 +171,23 @@ async fn send_single_request(
     let client = client_builder.build()?;
 
     // Build the request
-    let mut req_builder = client.request(method.clone(), remote_uri.to_string());
+    let mut req_builder = client.request(method.clone(), &config.remote_addr);
+    req_builder = req_builder.header(ORIGINAL_URL_HEADER, target_uri.to_string());
 
     // Add headers
     for (name, value) in headers.iter() {
+        if name == HOST || name == CONTENT_LENGTH || is_reserved_header(name.as_str()) {
+            continue;
+        }
+
         req_builder = req_builder.header(name, value);
     }
 
     // Add body
     req_builder = req_builder.body(body_bytes.to_vec());
+    req_builder = req_builder.header(CONTENT_LENGTH, body_bytes.len());
 
+    debug!("Single request details: method: {:?}", req_builder);
     let send_start = Instant::now();
 
     // Send the request
@@ -205,7 +200,7 @@ async fn send_single_request(
             let response_headers = response.headers().clone();
             debug!(
                 method = %method,
-                remote_uri = %remote_uri,
+                remote_uri = %target_uri,
                 status = %status,
                 duration_ms = %send_duration.as_millis(),
                 "Received response from remote proxy"
@@ -223,15 +218,15 @@ async fn send_single_request(
 
             debug!(
                 method = %method,
-                remote_uri = %remote_uri,
+                remote_uri = %target_uri,
                 response_size = %response_body.len(),
                 "Response body received"
             );
 
             // Log detailed response information at debug level
-            tracing::debug!(
+            debug!(
                 method = %method,
-                uri = %remote_uri,
+                uri = %target_uri,
                 status = %status,
                 headers = ?response_headers,
                 body_info = %crate::logging::format_body_info(&response_body),
@@ -243,7 +238,7 @@ async fn send_single_request(
         Err(error) => {
             error!(
                 method = %method,
-                remote_uri = %remote_uri,
+                remote_uri = %target_uri,
                 error = %error,
                 duration_ms = %send_duration.as_millis(),
                 "Failed to send request to remote proxy"

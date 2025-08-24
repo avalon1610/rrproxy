@@ -1,3 +1,4 @@
+use crate::common::*;
 use anyhow::{anyhow, bail, Result};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -6,11 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tracing::warn;
-use tracing::{debug, info};
-
-use crate::common::*;
-use crate::log_debug_request;
+use tracing::info;
+use tracing::{debug, warn};
 
 pub type ChunkStore = Arc<Mutex<HashMap<String, Vec<(usize, Bytes)>>>>;
 
@@ -142,12 +140,6 @@ async fn handle_chunked_request(
     let (parts, body) = req.into_parts();
     let chunk_bytes = body.collect().await?.to_bytes();
 
-    // Log detailed chunk information at debug level
-    let original_uri: hyper::Uri = original_url
-        .parse()
-        .unwrap_or_else(|_| "/".parse().unwrap());
-    log_debug_request!(parts.method, original_uri, parts.headers, chunk_bytes);
-
     debug!(
         transaction_id = %transaction_id,
         chunk_index = %chunk_index,
@@ -244,9 +236,6 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
     let (parts, body) = req.into_parts();
     let body_bytes = body.collect().await?.to_bytes();
 
-    // Log detailed request information at debug level
-    log_debug_request!(method, uri, parts.headers, body_bytes);
-
     let request_size = body_bytes.len();
 
     // Check if this request came from local proxy (has X-Original-Url header)
@@ -272,7 +261,6 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
 
     // Copy headers (except our internal ones)
     for (name, value) in parts.headers.iter() {
-        debug!("original header: {}: {:?}", name, value);
         if !is_reserved_header(name.as_str()) && !name.as_str().eq_ignore_ascii_case("host") {
             req_builder = req_builder.header(name, value);
         }
@@ -280,6 +268,7 @@ async fn handle_single_request(req: Request<Incoming>) -> Result<Response<Full<B
 
     req_builder = req_builder.body(body_bytes.to_vec());
 
+    debug!("Single request details: {:?}", req_builder);
     forward_request_to_target(req_builder).await
 }
 
@@ -314,7 +303,7 @@ async fn forward_request_to_target(
     );
 
     // Log detailed response information at debug level
-    tracing::debug!(
+    debug!(
         status = %status,
         headers = ?response_headers,
         body_info = %crate::logging::format_body_info(&response_body),
