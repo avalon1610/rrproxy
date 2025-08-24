@@ -4,16 +4,11 @@ pub const TOTAL_CHUNKS_HEADER: &str = "X-Total-Chunks";
 pub const IS_LAST_CHUNK_HEADER: &str = "X-Is-Last-Chunk";
 pub const ORIGINAL_URL_HEADER: &str = "X-Original-Url";
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_header_constants() {
-        assert_eq!(TRANSACTION_ID_HEADER, "X-Transaction-Id");
-        assert_eq!(CHUNK_INDEX_HEADER, "X-Chunk-Index");
-        assert_eq!(TOTAL_CHUNKS_HEADER, "X-Total-Chunks");
-        assert_eq!(IS_LAST_CHUNK_HEADER, "X-Is-Last-Chunk");
-        assert_eq!(ORIGINAL_URL_HEADER, "X-Original-Url");
-    }
+pub fn is_reserved_header(header: &str) -> bool {
+    let header_lower = header.to_ascii_lowercase();
+    header_lower == TRANSACTION_ID_HEADER.to_ascii_lowercase()
+        || header_lower == CHUNK_INDEX_HEADER.to_ascii_lowercase()
+        || header_lower == TOTAL_CHUNKS_HEADER.to_ascii_lowercase()
+        || header_lower == IS_LAST_CHUNK_HEADER.to_ascii_lowercase()
+        || header_lower == ORIGINAL_URL_HEADER.to_ascii_lowercase()
 }
