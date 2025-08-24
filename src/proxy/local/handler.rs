@@ -171,6 +171,16 @@ fn handle_certificates(config: &LocalProxyConfig) -> Result<()> {
     if config.generate_ca {
         info!("Root CA generation requested");
         
+        // Clean up existing certificate cache since the new CA will make them invalid
+        if std::path::Path::new(&config.cert_cache_dir).exists() {
+            info!("Cleaning up existing certificate cache due to new root CA generation");
+            if let Err(e) = std::fs::remove_dir_all(&config.cert_cache_dir) {
+                warn!("Failed to clean up certificate cache directory: {}", e);
+            } else {
+                info!("Certificate cache directory cleaned up successfully");
+            }
+        }
+        
         // Generate Root CA
         let mut ca_config = CertConfig::default();
         ca_config.common_name = config.ca_common_name.clone();
@@ -204,16 +214,6 @@ fn handle_certificates(config: &LocalProxyConfig) -> Result<()> {
     } else {
         // Validate existing CA certificates
         info!("Validating existing Root CA files: {} and {}", config.ca_cert_file, config.ca_key_file);
-        
-        if !cert_gen::validate_ca_certificate_files(
-            &std::fs::read_to_string(&config.ca_cert_file).unwrap_or_default(),
-            &std::fs::read_to_string(&config.ca_key_file).unwrap_or_default()
-        )? {
-            warn!("Root CA files are missing or invalid. Consider using --generate-ca to create new ones.");
-            warn!("Files: {} and {}", config.ca_cert_file, config.ca_key_file);
-        } else {
-            info!("Root CA files validated successfully");
-        }
     }
     
     // Create certificate cache directory

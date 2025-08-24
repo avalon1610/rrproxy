@@ -468,42 +468,6 @@ impl DynamicTlsHandler {
 
         Ok(http_response)
     }
-
-    /// Get cache statistics
-    pub fn get_cache_stats(&self) -> Result<String> {
-        let cert_stats = self.cert_manager.get_cache_stats()?;
-        let acceptor_count = self.acceptor_cache.read()
-            .map_err(|_| anyhow!("Failed to acquire acceptor cache read lock"))?
-            .len();
-
-        Ok(format!(
-            "Certificate Cache Stats:\n\
-             - Memory cache: {} certificates\n\
-             - Disk cache: {} certificates\n\
-             - Cache directory: {}\n\
-             - TLS acceptors cached: {}",
-            cert_stats.memory_cache_size,
-            cert_stats.disk_cache_size,
-            cert_stats.cache_directory,
-            acceptor_count
-        ))
-    }
-
-    /// Clean up old certificates and acceptors
-    pub fn cleanup_cache(&self, max_age_days: u64) -> Result<()> {
-        // Clean up certificate cache
-        self.cert_manager.cleanup_old_certificates(max_age_days)?;
-        
-        // Clear acceptor cache (they will be recreated as needed)
-        {
-            let mut cache = self.acceptor_cache.write()
-                .map_err(|_| anyhow!("Failed to acquire acceptor cache write lock"))?;
-            cache.clear();
-        }
-
-        info!("TLS handler cache cleanup completed");
-        Ok(())
-    }
 }
 
 #[cfg(test)]

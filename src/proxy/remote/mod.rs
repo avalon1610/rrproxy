@@ -5,7 +5,3 @@ pub mod tunnel;
 
 pub use config::RemoteProxyConfig;
 pub use handler::start;
-
-pub async fn start_remote_proxy(config: RemoteProxyConfig) -> anyhow::Result<()> {
-    handler::start(config).await
-}
